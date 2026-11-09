@@ -11,7 +11,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Nix
         uses: cachix/install-nix-action@v27
@@ -26,13 +26,13 @@ jobs:
           VERSION=$(echo "$API_RESPONSE" | jq -r '.tag_name' | sed 's/^v//')
           CURRENT=$(grep 'version = ' package.nix | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
-          echo "latest=$VERSION" >> $GITHUB_OUTPUT
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "latest=$VERSION" >> "$GITHUB_OUTPUT"
 
           if [ "$VERSION" != "$CURRENT" ]; then
-            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
           else
-            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update package
