@@ -1,0 +1,81 @@
+name: Auto Update
+
+on:
+  schedule:
+    - cron: '*/120 * * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Check for updates
+        id: check
+        run: |
+          API_RESPONSE=$(curl -sL "https://api.github.com/repos/mitos-editor/mitos/releases/latest")
+          VERSION=$(echo "$API_RESPONSE" | jq -r '.tag_name' | sed 's/^v//')
+          CURRENT=$(grep 'version = ' package.nix | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "latest=$VERSION" >> $GITHUB_OUTPUT
+
+          if [ "$VERSION" != "$CURRENT" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update package
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          VERSION="${{ steps.check.outputs.latest }}"
+          BASE_URL="https://github.com/mitos-editor/mitos/releases/download/v${VERSION}"
+
+          X86_HASH=$(nix-prefetch-url "${BASE_URL}/mitos-v${VERSION}-x86_64-linux.tar.xz" 2>/dev/null)
+          AARCH64_HASH=$(nix-prefetch-url "${BASE_URL}/mitos-v${VERSION}-aarch64-linux.tar.xz" 2>/dev/null)
+          X86_SRI=$(nix hash convert --to sri --hash-algo sha256 "$X86_HASH")
+          AARCH64_SRI=$(nix hash convert --to sri --hash-algo sha256 "$AARCH64_HASH")
+
+          if [[ ! "$X86_SRI" =~ ^sha256- ]] || [[ ! "$AARCH64_SRI" =~ ^sha256- ]]; then
+            echo "ERROR: Invalid SRI hash"
+            exit 1
+          fi
+
+          sed -i "s/version = \"[^\"]*\"/version = \"$VERSION\"/" package.nix
+          sed -i "s|x86_64-linux = \"sha256-[^\"]*\"|x86_64-linux = \"$X86_SRI\"|" package.nix
+          sed -i "s|aarch64-linux = \"sha256-[^\"]*\"|aarch64-linux = \"$AARCH64_SRI\"|" package.nix
+
+          git diff package.nix
+
+      - name: Test build
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          nix build .#mitos --accept-flake-config --impure
+
+      - name: Commit and push
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.nix
+          git commit -m "Update mitos to ${{ steps.check.outputs.latest }}"
+          git push
+
+      - name: Create Release
+        if: steps.check.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.check.outputs.latest }}" \
+            --title "mitos ${{ steps.check.outputs.latest }}" \
+            --notes "Updated mitos from ${{ steps.check.outputs.current }} to ${{ steps.check.outputs.latest }}"
